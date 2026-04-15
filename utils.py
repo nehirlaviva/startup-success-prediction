@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import spacy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
@@ -11,6 +12,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- PHASE 1: Data Preparation ---
+nlp = spacy.load("en_core_web_sm", disable=['parser', 'ner'])
+
+def clean_and_lemmatize(text):
+    if pd.isna(text) or text == "": return ""
+    doc = nlp(text.lower())
+    return " ".join([t.lemma_ for t in doc if t.is_alpha and not t.is_stop])
+
 def load_and_clean_data(file_path):
     print("Loading and Cleaning Data...")
     df = pd.read_csv(file_path)
@@ -29,12 +37,19 @@ def load_and_clean_data(file_path):
 
 # --- PHASE 2: Market Momentum Scoring ---
 def calculate_momentum_scores(df_train, df_full):
-    print("Calculating Peak Momentum Scores...")
+    print("Pre-processing text: Combining, Cleaning, and Lemmatizing...")
     
-    # Combine ALL text fields for deep analysis
-    df_full['combined_text'] = df_full['tags'].fillna('') + " " + df_full['short_description'].fillna('') + " " + df_full['long_description'].fillna('')
-    df_train['combined_text'] = df_train['tags'].fillna('') + " " + df_train['short_description'].fillna('') + " " + df_train['long_description'].fillna('')
+    # 1. COMBINE: Create the raw text block from all sources
+    for dataframe in [df_full, df_train]:
+        dataframe['combined_text'] =(
+            dataframe['tags'].fillna('') + " " + 
+            dataframe['short_description'].fillna(''))
+        
+        # 2. CLEAN: Run the lemmatization on that combined block
+        # This turns "builders in AI" into "builder ai"
+        dataframe['combined_text'] = dataframe['combined_text'].apply(clean_and_lemmatize)
 
+    # 3. SETUP BATCH YEARS (Keep your existing year logic here)
     def extract_year(batch):
         if pd.isna(batch): return 0
         batch = str(batch)
@@ -46,6 +61,7 @@ def calculate_momentum_scores(df_train, df_full):
     df_full['batch_year'] = df_full['batch'].apply(extract_year)
     df_train['batch_year'] = df_train['batch'].apply(extract_year)
     
+    # 4. TF-IDF (Now running on clean, lemmatized text)
     df_nlp = df_full[df_full['batch_year'] >= 2005]
     years = sorted(df_nlp['batch_year'].unique())
     
@@ -53,8 +69,14 @@ def calculate_momentum_scores(df_train, df_full):
     for year in years:
         text_data = df_nlp[df_nlp['batch_year'] == year]['combined_text'].tolist()
         if not text_data: continue
-        # Optimized to 800 features to filter noise
-        vectorizer = TfidfVectorizer(token_pattern=r'(?u)\b\w+\b', lowercase=True, stop_words='english', max_features=800)
+        
+        # Since we lemmatized, "builder" and "builders" are now one word
+        vectorizer = TfidfVectorizer(
+            token_pattern=r'(?u)\b\w+\b', 
+            lowercase=True, 
+            max_features=800,
+            ngram_range=(1, 2)
+        )
         try:
             tfidf_matrix = vectorizer.fit_transform(text_data)
             feature_names = vectorizer.get_feature_names_out()
@@ -62,7 +84,8 @@ def calculate_momentum_scores(df_train, df_full):
             yearly_word_freq[year] = dict(zip(feature_names, avg_tfidf))
         except ValueError:
             pass
-
+            #eliminate a and the by etc
+        
     yearly_word_scores = {}
     for current_year in years:
         word_stats = []
@@ -99,7 +122,7 @@ def calculate_momentum_scores(df_train, df_full):
         return np.max(scores) if scores else 0 # Peak Momentum
 
     df_train['Market_Signal_Score'] = df_train.apply(get_startup_score, axis=1)
-    return df_train
+    return df_train, yearly_word_scores
 
 # --- PHASE 3: Model Training ---
 def run_model_experiment(df):
