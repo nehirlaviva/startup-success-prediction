@@ -49,7 +49,7 @@ def calculate_momentum_scores(df_train, df_full):
         # This turns "builders in AI" into "builder ai"
         dataframe['combined_text'] = dataframe['combined_text'].apply(clean_and_lemmatize)
 
-    # 3. SETUP BATCH YEARS (Keep your existing year logic here)
+    # 3. SETUP BATCH YEARS 
     def extract_year(batch):
         if pd.isna(batch): return 0
         batch = str(batch)
@@ -61,7 +61,7 @@ def calculate_momentum_scores(df_train, df_full):
     df_full['batch_year'] = df_full['batch'].apply(extract_year)
     df_train['batch_year'] = df_train['batch'].apply(extract_year)
     
-    # 4. TF-IDF (Now running on clean, lemmatized text)
+    # 4. TF-IDF (running on clean, lemmatized text)
     df_nlp = df_full[df_full['batch_year'] >= 2005]
     years = sorted(df_nlp['batch_year'].unique())
     
