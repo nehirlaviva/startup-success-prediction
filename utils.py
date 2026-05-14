@@ -14,15 +14,12 @@ warnings.filterwarnings('ignore')
 # --- PHASE 1: Data Preparation ---
 nlp = spacy.load("en_core_web_sm", disable=['parser', 'ner'])
 
-# THE SPEED UPGRADE: Batch processing instead of row-by-row
+# Batch processing 
 def batch_lemmatize(text_list):
     cleaned_texts = []
-    # Lowercase everything exactly like the YC code did
     processed_list = [str(text).lower() if pd.notna(text) and text != "" else "" for text in text_list]
-    
-    # Unleash the Mac M2: Process 2,000 startups at once
     for doc in nlp.pipe(processed_list, batch_size=2000):
-        cleaned_texts.append(" ".join([t.lemma_ for t in doc if t.is_alpha and not t.is_stop]))
+        cleaned_texts.append(" ".join([t.lemma_ for t in doc if t.is_alpha and not t.is_stop and t.pos_ in ['NOUN', 'PROPN', 'ADJ']]))
     return cleaned_texts
 
 def load_and_clean_data(file_path):
@@ -43,13 +40,12 @@ def load_and_clean_data(file_path):
     df = df.dropna(subset=['founded_year']).copy()
     df['founded_year'] = df['founded_year'].astype(int)
 
-    # This drops the "ghost" startups BEFORE median imputation ruins the data
+    # drop the "ghost" startups before median imputation
     critical_cols = ['funding_rounds', 'funding_total_usd', 'milestones', 'relationships', 'investment_rounds']
     exist_crit = [c for c in critical_cols if c in df_train.columns]
     df_train['missing_count'] = df_train[exist_crit].isnull().sum(axis=1)
     df_train = df_train[df_train['missing_count'] <= 3].copy()
     df_train.drop(columns=['missing_count'], inplace=True)
-    # ----------------------------------------------
 
     # Crunchbase Numeric Columns (Median Imputation)
     numeric_cols = ['investment_rounds', 'invested_companies', 'funding_rounds', 
@@ -66,23 +62,22 @@ def load_and_clean_data(file_path):
 def calculate_momentum_scores(df_train, df_full):
     print("Pre-processing text: Combining, Cleaning, and Lemmatizing (Fast Batch Mode)...")
     
-    # 1. COMBINE
+    # Combine
     for dataframe in [df_full, df_train]:
         dataframe['combined_text'] =(
             dataframe['tag_list'].fillna('') + " " + 
             dataframe['overview'].fillna(''))
         
-        # 2. CLEAN
+        # Clean
         dataframe['combined_text'] = batch_lemmatize(dataframe['combined_text'].tolist())
 
     df_full['batch_year'] = df_full['founded_year']
     df_train['batch_year'] = df_train['founded_year']
     
-    # 3. TF-IDF WITH JARGON FILTERS
+    # 3. TF-IDF 
     df_nlp = df_full[df_full['batch_year'] >= 2005]
     years = sorted(df_nlp['batch_year'].unique())
     
-    # --- THE NEW JARGON SLAYER ---
     corporate_jargon = [
         'necessary', 'parameter', 'process', 'optimize', 'provide', 'surface', 
         'solution', 'product', 'service', 'company', 'customer', 'client', 
@@ -93,7 +88,7 @@ def calculate_momentum_scores(df_train, df_full):
         'rating', 'hour', 'machine', 'city', 'month', 'year', 'day', 'week', 
         'startup', 'round', 'investment', 'investor', 'market', 'application', 
         'network', 'fund', 'europe', 'america', 'sale', 'price', 'cost', 'revenue', 'growth'
-        'classified', 'creator'
+        'classified', 'creator', 'accesible', 'friend', 'family'
     ]
     
     yearly_word_freq = {}
@@ -104,11 +99,11 @@ def calculate_momentum_scores(df_train, df_full):
         vectorizer = TfidfVectorizer(
             token_pattern=r'(?u)\b[a-zA-Z]{4,}\b', 
             lowercase=True, 
-            max_features=600,
+            max_features=1000,
             ngram_range=(1, 2),
-            min_df= 0.0005,
-            max_df=0.05,             # Ignore words in >50% of startups
-            stop_words=corporate_jargon # Delete the bullshit words
+            min_df= 0.001,
+            max_df=0.05,           
+            stop_words=corporate_jargon 
         )
         try:
             tfidf_matrix = vectorizer.fit_transform(text_data)
