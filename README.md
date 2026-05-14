@@ -45,7 +45,7 @@ To get started with the repository, follow these steps:
 
 1. **Clone the Repository:**
     ```bash
-    git clone https://github.com/your-username/startup-success-prediction.git
+    git clone https://github.com/nehirlaviva/startup-success-prediction.git
     cd startup-success-prediction
     ```
 
