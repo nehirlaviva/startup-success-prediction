@@ -14,7 +14,6 @@ warnings.filterwarnings('ignore')
 # --- PHASE 1: Data Preparation ---
 nlp = spacy.load("en_core_web_sm", disable=['parser', 'ner'])
 
-# Batch processing 
 def batch_lemmatize(text_list):
     cleaned_texts = []
     processed_list = [str(text).lower() if pd.notna(text) and text != "" else "" for text in text_list]
@@ -74,21 +73,20 @@ def calculate_momentum_scores(df_train, df_full):
     df_full['batch_year'] = df_full['founded_year']
     df_train['batch_year'] = df_train['founded_year']
     
-    # 3. TF-IDF 
+    # TF-IDF 
     df_nlp = df_full[df_full['batch_year'] >= 2005]
     years = sorted(df_nlp['batch_year'].unique())
     
     corporate_jargon = [
         'necessary', 'parameter', 'process', 'optimize', 'provide', 'surface', 
-        'solution', 'product', 'service', 'company', 'customer', 'client', 
-        'business', 'platform', 'technology', 'user','dream', 'dress', 'help', 'allow', 'classified' 
-        'enable', 'feature', 'include', 'build', 'create', 'offer', 'base',
+        'solution', 'product', 'service', 'company','dream', 'dress', 'help', 'allow', 
+        'classified', 'enable', 'feature', 'include', 'build', 'create', 'offer', 'base',
         'use', 'make', 'new', 'world', 'need', 'way', 'work', 'time', 'high', 'low',
         'app', 'funding', 'transaction', 'london', 'tip', 'appointment', 'kind', 
         'rating', 'hour', 'machine', 'city', 'month', 'year', 'day', 'week', 
         'startup', 'round', 'investment', 'investor', 'market', 'application', 
-        'network', 'fund', 'europe', 'america', 'sale', 'price', 'cost', 'revenue', 'growth'
-        'classified', 'creator', 'accesible', 'friend', 'family'
+        'network', 'fund', 'europe', 'america', 'sale', 'price', 'cost', 'revenue', 'growth',
+        'creator', 'accessible', 'friend', 'family'
     ]
     
     yearly_word_freq = {}
@@ -101,7 +99,7 @@ def calculate_momentum_scores(df_train, df_full):
             lowercase=True, 
             max_features=1000,
             ngram_range=(1, 2),
-            min_df= 0.001,
+            min_df=0.001,
             max_df=0.05,           
             stop_words=corporate_jargon 
         )
@@ -114,16 +112,39 @@ def calculate_momentum_scores(df_train, df_full):
             pass
         
     yearly_word_scores = {}
+    
+    # Sensitivity parameter to prevent division by zero for genuinely novel words that appear in the current year but not in the past
+    epsilon = 1e-4 
+    
     for current_year in years:
         word_stats = []
         current_freqs = yearly_word_freq.get(current_year, {})
-        past_years = [y for y in years if y < current_year and y >= current_year - 3]
+        
+        # Define the sequential window ending in current_year (3-year lookback + current year)
+        window_years = [y for y in years if current_year - 3 <= y <= current_year]
         
         for word, tfidf in current_freqs.items():
             aagr = 0
-            if len(past_years) > 0:
-                growth_rates = [(tfidf - yearly_word_freq.get(py, {}).get(word, 0)) / (yearly_word_freq.get(py, {}).get(word, 0) + 0.0001) for py in past_years]
-                aagr = np.mean(growth_rates)
+            
+            if len(window_years) > 1:
+                yoy_growth_rates = []
+                
+                # Calculate step-by-step Year-over-Year (YoY) growth
+                for i in range(1, len(window_years)):
+                    prev_y = window_years[i-1]
+                    curr_y = window_years[i]
+                    
+                    val_prev = yearly_word_freq.get(prev_y, {}).get(word, 0)
+                    val_curr = yearly_word_freq.get(curr_y, {}).get(word, 0)
+                    
+                    # Standard YoY formula: (Current - Past) / Past
+                    # Epsilon prevents ZeroDivisionError for genuinely novel words
+                    rate = (val_curr - val_prev) / (val_prev + epsilon)
+                    yoy_growth_rates.append(rate)
+                
+                # AAGR is the arithmetic mean of these consecutive YoY steps
+                aagr = np.mean(yoy_growth_rates)
+                
             word_stats.append({'word': word, 'tfidf': tfidf, 'aagr': aagr})
             
         if not word_stats: continue
@@ -144,9 +165,27 @@ def calculate_momentum_scores(df_train, df_full):
 
     def get_startup_score(row):
         year = row['batch_year']
-        text = str(row['combined_text']).lower().split()
-        scores = [yearly_word_scores.get(year, {}).get(w) for w in text if yearly_word_scores.get(year, {}).get(w) is not None]
-        return np.max(scores) if scores else 0
+        text_words = str(row['combined_text']).lower().split()
+        
+        if not text_words:
+            return 0
+            
+        doc_length = len(text_words)
+        weighted_scores = []
+        unique_words = set(text_words)
+        
+        for w in unique_words:
+            word_score = yearly_word_scores.get(year, {}).get(w, 0)
+            if word_score > 0:
+                # Term frequency (TF) within this specific startup's description
+                tf = text_words.count(w) / doc_length
+                weighted_scores.append(word_score * tf)
+                
+        if not weighted_scores:
+            return 0
+            
+        # Multiply by 100 to scale the score up to a readable continuous variable
+        return np.sum(weighted_scores) * 100
 
     df_train['Market_Signal_Score'] = df_train.apply(get_startup_score, axis=1)
     return df_train, yearly_word_scores, yearly_word_freq
